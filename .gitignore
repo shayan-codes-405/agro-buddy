@@ -23,6 +23,9 @@ frontend/dist/
 
 # OS / IDE
 .DS_Store
+desktop.ini
+*.ini
+Thumbs.db
 .vscode/
 .idea/
 
