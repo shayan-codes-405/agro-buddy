@@ -92,6 +92,106 @@ Data Rescue is AgroBuddy's foundational transformation layer. It converts chaoti
 
 ---
 
+## 📸 Data Rescue Visual Proofs & Code Implementation
+
+Below are empirical transformation audit cards and actual Data Rescue Python code snippets from [`notebooks/`](file:///Users/harshsingh/Desktop/agro-buddy/notebooks) confirming raw record rescue, multilingual alias mapping, unit conversion, currency string parsing, and SLA metric calculations:
+
+### 1. Mandi Arrivals Cleaning Proof (Multilingual Mapping & Unit Standardization)
+![Mandi Arrivals Data Rescue Proof](images/data_rescue_arrivals_proof.png)
+
+<details>
+<summary><b>🔍 View Code Implementation: Multilingual Alias Mapping & Quantity Parser (notebooks/01_Mandi_Arrivals_Data_Rescue.ipynb)</b></summary>
+
+```python
+# Multilingual Crop Alias Resolution Dictionary
+crop_mapping = {
+    # Wheat Category (Devanagari, Transliterated, Trailing Spaces)
+    'Wheat': 'Wheat', 'गेहूं': 'Wheat', 'Gehun': 'Wheat', 'wheat': 'Wheat', 'GEHUN': 'Wheat', 'Kanak': 'Wheat',
+    # Paddy Category
+    'Rice': 'Rice', 'चावल': 'Rice', 'Chawal': 'Rice', 'Paddy': 'Rice', ' धान': 'Rice', 'Dhaan': 'Rice',
+    # Cotton, Maize, Mustard, Sugarcane Categories...
+}
+
+# Apply Mapping
+df['clean_crop_name'] = df['crop_name'].apply(lambda x: crop_mapping.get(str(x).strip(), str(x).strip()))
+
+# Robust Quantity & Unit Conversion Parser
+def parse_quantity(row):
+    quantity = row['arrival_quantity']
+    unit = str(row['unit']).strip().upper() if pd.notna(row['unit']) else ""
+
+    # Parse numeric quantity & handle negative anomalies
+    quantity_value = abs(float(quantity)) if pd.notna(quantity) else np.nan
+    is_negative_anomaly = float(quantity) < 0 if pd.notna(quantity) else False
+
+    # Unit Standardization to Quintals (Qtl)
+    if unit in ['T', 'TONNE', 'TONNES', 'TON', 'MT']:
+        quantity_qtl = quantity_value * 10.0   # 1 MT = 10 Qtl
+    elif unit in ['KG', 'KGS', 'KILOGRAM', 'KILOGRAMS']:
+        quantity_qtl = quantity_value / 100.0  # 100 KG = 1 Qtl
+    else:
+        quantity_qtl = quantity_value
+
+    return pd.Series([quantity_qtl, "Qtl", is_negative_anomaly])
+```
+</details>
+
+---
+
+### 2. Price & MSP Cleaning Proof (Currency String Parsing & Statutory Floor Gap Math)
+![Price and MSP Data Rescue Proof](images/data_rescue_price_proof.png)
+
+<details>
+<summary><b>🔍 View Code Implementation: Currency Parsing & MSP Gap Metrics (notebooks/03_Price_and_MSP_Data_Rescue.ipynb)</b></summary>
+
+```python
+# Currency Prefix & Format Cleaner (Strips ₹, Rs., INR, trailing /- before extracting float)
+def clean_price_value(val):
+    if pd.isna(val) or val is None:
+        return np.nan
+    s_val = str(val).strip().replace(',', '')
+    s_val = re.sub(r'(?i)Rs\.?|INR|₹|/-', '', s_val).strip()
+    
+    num_match = re.search(r'([-+]?\d*\.?\d+)', s_val)
+    return float(num_match.group(1)) if num_match else np.nan
+
+# Calculate MSP Gap Metrics & Distressed Trade Flags
+df['msp_gap'] = df['clean_msp'] - df['clean_modal_price']
+df['below_msp_flag'] = np.where(
+    df['clean_msp'].notnull() & (df['clean_modal_price'] < df['clean_msp']), 
+    1, 
+    0
+)
+```
+</details>
+
+---
+
+### 3. Transport Logistics Cleaning Proof (SLA Velocity Math & Delay Hour Flags)
+![Transport Logistics Data Rescue Proof](images/data_rescue_logistics_proof.png)
+
+<details>
+<summary><b>🔍 View Code Implementation: SLA Transit Math & Vehicle Registration Regex (notebooks/04_Transport_Logistics_Data_Rescue.ipynb)</b></summary>
+
+```python
+# Vehicle Registration Regex Standardizer (e.g., PB02AB1234 -> PB-02-AB-1234)
+def standardize_vehicle_no(val):
+    clean_str = re.sub(r'[^A-Z0-9]', '', str(val).strip().upper())
+    m = re.match(r'^([A-Z]{2})(\d{2})([A-Z]{1,2})(\d{4})$', clean_str)
+    if m:
+        state, dist, series, num = m.groups()
+        return f"{state}-{dist}-{series}-{num}"
+    return clean_str
+
+# Logistics SLA Analytics (Baseline speed = 40.0 km/h)
+df['expected_hours'] = (df['clean_distance_km'] / 40.0).round(2)
+df['delay_hours'] = (df['clean_transit_hours'] - df['expected_hours']).round(2)
+df['is_delayed_flag'] = np.where(df['delay_hours'] > 2.0, 1, 0)
+```
+</details>
+
+---
+
 ## 📊 The Data Rescue Ledger
 
 | Dataset | Raw Rows | Clean Rows | Transformation & Audit Rationale |
