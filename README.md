@@ -92,18 +92,61 @@ Data Rescue is AgroBuddy's foundational transformation layer. It converts chaoti
 
 ---
 
-## 📸 Data Rescue Visual Proofs & Code Implementation
+## 💻 Data Rescue Code Implementation & Pipeline Summary
 
-Below are empirical transformation audit cards and actual Data Rescue Python code snippets from [`notebooks/`](file:///Users/harshsingh/Desktop/agro-buddy/notebooks) confirming raw record rescue, multilingual alias mapping, unit conversion, currency string parsing, and SLA metric calculations:
+Below are the Python data cleaning implementations extracted from [`notebooks/`](file:///Users/harshsingh/Desktop/agro-buddy/notebooks) for each operational domain, followed by a unified master summary snippet encapsulating the full Data Rescue transformation pipeline:
 
-### 1. Mandi Arrivals Cleaning Proof (Multilingual Mapping & Unit Standardization)
-![Mandi Arrivals Data Rescue Proof](images/data_rescue_arrivals_proof.png)
-
-<details>
-<summary><b>🔍 View Code Implementation: Multilingual Alias Mapping & Quantity Parser (notebooks/01_Mandi_Arrivals_Data_Rescue.ipynb)</b></summary>
+### 1. Unified Master Pipeline Summary (End-to-End Data Cleaning Workflow)
 
 ```python
-# Multilingual Crop Alias Resolution Dictionary
+"""
+===============================================================================
+AGROBUDDY DATA RESCUE: UNIFIED CLEANING PIPELINE SUMMARY
+===============================================================================
+Encapsulates all 4 data rescue stages across arrivals, prices, transport, & weather.
+"""
+
+def execute_data_rescue_pipeline(raw_data_dict):
+    # 1. ARRIVALS: Multilingual mapping & Unit standardization to Quintals (Qtl)
+    df_arrivals = raw_data_dict['arrivals'].copy()
+    df_arrivals['clean_crop_name'] = df_arrivals['crop_name'].apply(lambda x: CROP_ALIAS_MAP.get(str(x).strip(), str(x).strip()))
+    df_arrivals[['arrival_qtl', 'unit_standardized', 'is_negative_anomaly']] = df_arrivals.apply(parse_quantity_to_qtl, axis=1)
+    df_arrivals['clean_date'] = pd.to_datetime(df_arrivals['date'].astype(str).str.replace('.', '-'), errors='coerce').dt.strftime('%Y-%m-%d')
+
+    # 2. PRICES & MSP: Currency symbol stripping, float parsing, & MSP Gap math
+    df_prices = raw_data_dict['prices'].copy()
+    for col in ['min_price', 'max_price', 'modal_price', 'msp']:
+        df_prices[f'clean_{col}'] = df_prices[col].apply(clean_currency_price)
+    df_prices['msp_gap'] = df_prices['clean_msp'] - df_prices['clean_modal_price']
+    df_prices['below_msp_flag'] = np.where(df_prices['clean_msp'].notnull() & (df_prices['clean_modal_price'] < df_prices['clean_msp']), 1, 0)
+
+    # 3. LOGISTICS: Timestamp parsing, Expected SLA transit hours (40.0 km/h), & Delay flags
+    df_logistics = raw_data_dict['logistics'].copy()
+    df_logistics['clean_transit_hours'] = df_logistics['transit_hours'].apply(lambda x: abs(float(x)) if pd.notna(x) else np.nan)
+    df_logistics['expected_hours'] = (df_logistics['clean_distance_km'] / 40.0).round(2)
+    df_logistics['delay_hours'] = (df_logistics['clean_transit_hours'] - df_logistics['expected_hours']).round(2)
+    df_logistics['is_delayed_flag'] = np.where(df_logistics['delay_hours'] > 2.0, 1, 0)
+
+    # 4. WEATHER: Fahrenheit to Celsius (°F -> °C), rainfall mm conversion, & extreme anomaly flags
+    df_weather = raw_data_dict['weather'].copy()
+    df_weather['temp_celsius'] = df_weather.apply(lambda r: (r['temp'] - 32) * 5/9 if str(r['unit']).upper() == 'F' else r['temp'], axis=1)
+    df_weather['rainfall_mm'] = df_weather.apply(lambda r: r['rainfall'] * 25.4 if str(r['unit']).lower() in ['in', 'inch'] else r['rainfall'], axis=1)
+    df_weather['is_heatwave'] = np.where(df_weather['temp_celsius'] > 40.0, 1, 0)
+
+    return {
+        'clean_arrivals': df_arrivals,
+        'clean_prices': df_prices,
+        'clean_logistics': df_logistics,
+        'clean_weather': df_weather
+    }
+```
+
+---
+
+### 2. Mandi Arrivals Cleaning (Multilingual Aliases & Quantity Parser)
+
+```python
+# Multilingual Crop Alias Resolution Dictionary (notebooks/01_Mandi_Arrivals_Data_Rescue.ipynb)
 crop_mapping = {
     # Wheat Category (Devanagari, Transliterated, Trailing Spaces)
     'Wheat': 'Wheat', 'गेहूं': 'Wheat', 'Gehun': 'Wheat', 'wheat': 'Wheat', 'GEHUN': 'Wheat', 'Kanak': 'Wheat',
@@ -115,12 +158,11 @@ crop_mapping = {
 # Apply Mapping
 df['clean_crop_name'] = df['crop_name'].apply(lambda x: crop_mapping.get(str(x).strip(), str(x).strip()))
 
-# Robust Quantity & Unit Conversion Parser
+# Robust Quantity & Unit Conversion Parser (MT -> Qtl, KG -> Qtl)
 def parse_quantity(row):
     quantity = row['arrival_quantity']
     unit = str(row['unit']).strip().upper() if pd.notna(row['unit']) else ""
 
-    # Parse numeric quantity & handle negative anomalies
     quantity_value = abs(float(quantity)) if pd.notna(quantity) else np.nan
     is_negative_anomaly = float(quantity) < 0 if pd.notna(quantity) else False
 
@@ -134,18 +176,13 @@ def parse_quantity(row):
 
     return pd.Series([quantity_qtl, "Qtl", is_negative_anomaly])
 ```
-</details>
 
 ---
 
-### 2. Price & MSP Cleaning Proof (Currency String Parsing & Statutory Floor Gap Math)
-![Price and MSP Data Rescue Proof](images/data_rescue_price_proof.png)
-
-<details>
-<summary><b>🔍 View Code Implementation: Currency Parsing & MSP Gap Metrics (notebooks/03_Price_and_MSP_Data_Rescue.ipynb)</b></summary>
+### 3. Price & MSP Cleaning (Currency String Parsing & Statutory Floor Gap Math)
 
 ```python
-# Currency Prefix & Format Cleaner (Strips ₹, Rs., INR, trailing /- before extracting float)
+# Currency Prefix & Format Cleaner (notebooks/03_Price_and_MSP_Data_Rescue.ipynb)
 def clean_price_value(val):
     if pd.isna(val) or val is None:
         return np.nan
@@ -163,18 +200,13 @@ df['below_msp_flag'] = np.where(
     0
 )
 ```
-</details>
 
 ---
 
-### 3. Transport Logistics Cleaning Proof (SLA Velocity Math & Delay Hour Flags)
-![Transport Logistics Data Rescue Proof](images/data_rescue_logistics_proof.png)
-
-<details>
-<summary><b>🔍 View Code Implementation: SLA Transit Math & Vehicle Registration Regex (notebooks/04_Transport_Logistics_Data_Rescue.ipynb)</b></summary>
+### 4. Transport Logistics Cleaning (SLA Velocity Math & Vehicle Registration Regex)
 
 ```python
-# Vehicle Registration Regex Standardizer (e.g., PB02AB1234 -> PB-02-AB-1234)
+# Vehicle Registration Regex Standardizer (notebooks/04_Transport_Logistics_Data_Rescue.ipynb)
 def standardize_vehicle_no(val):
     clean_str = re.sub(r'[^A-Z0-9]', '', str(val).strip().upper())
     m = re.match(r'^([A-Z]{2})(\d{2})([A-Z]{1,2})(\d{4})$', clean_str)
@@ -188,7 +220,29 @@ df['expected_hours'] = (df['clean_distance_km'] / 40.0).round(2)
 df['delay_hours'] = (df['clean_transit_hours'] - df['expected_hours']).round(2)
 df['is_delayed_flag'] = np.where(df['delay_hours'] > 2.0, 1, 0)
 ```
-</details>
+
+---
+
+### 5. Weather Telemetry Cleaning (Temperature Unit Conversion & Sensor Isolation)
+
+```python
+# Weather Telemetry Unit Standardization (notebooks/05_Weather_Sensors_Data_Rescue.ipynb)
+def clean_weather_telemetry(df_weather):
+    # Convert Fahrenheit (°F) to Celsius (°C)
+    df_weather['temp_celsius'] = df_weather.apply(
+        lambda r: (r['temperature'] - 32) * 5/9 if str(r['temp_unit']).upper() == 'F' else r['temperature'], 
+        axis=1
+    )
+    # Convert Inches to Millimeters (mm)
+    df_weather['rainfall_mm'] = df_weather.apply(
+        lambda r: r['rainfall'] * 25.4 if str(r['rain_unit']).lower() in ['in', 'inch'] else r['rainfall'], 
+        axis=1
+    )
+    # Heatwave & Severe Weather Flags (Sensor-Level Isolation)
+    df_weather['is_heatwave'] = np.where(df_weather['temp_celsius'] > 40.0, 1, 0)
+    df_weather['is_heavy_rain'] = np.where(df_weather['rainfall_mm'] > 50.0, 1, 0)
+    return df_weather
+```
 
 ---
 
